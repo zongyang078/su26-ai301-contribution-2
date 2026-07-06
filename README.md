@@ -1,15 +1,17 @@
-# Contribution [#]: [Issue Title]
+# Contribution 2: [Issue Title]
 
-**Contribution Number:** [1 / 2 / 3]  
-**Student:** [Your Name]  
-**Issue:** [GitHub issue link]  
-**Status:** [Phase I / Phase II / Phase III / Phase IV] [In Progress / Complete]
+**Contribution Number:** [ 2 ]  
+**Student:** Zongyang Li
+**Issue:** https://github.com/pytorch/ignite/issues/513  
+**Status:** [Phase I ] [In Progress]
 
 ---
 
 ## Why I Chose This Issue
 
-[1-2 paragraphs explaining why this issue interests you, how it matches your skills/learning goals, what you hope to learn]
+I chose this issue because it lives in the same ignite/metrics/ module as my first contribution (issue #1757, EpochMetric output types), so I can build directly on the environment, testing patterns, and code style I already learned. It's also a natural extension of that work: multi-label metric averaging is a well-scoped, well-understood problem, and the maintainers (vfdev-5) already sketched an implementation direction back in 2019 via PR #516, which gives me a concrete reference point rather than an open-ended design problem.
+
+Technically, this matches my interest in evaluation/metrics engineering for ML systems — I want to get comfortable extending statistics/accumulator-style classes (reset/update/compute lifecycle) and handling tensor-shape edge cases correctly, which is directly relevant to the AI/ML engineering roles I'm applying for.
 
 ---
 
@@ -17,19 +19,24 @@
 
 ### Problem Description
 
-[In your own words, what's broken or missing?]
+In multi-label classification (each sample can belong to multiple, non-mutually-exclusive classes, e.g. y = [0, 1, 1]), Ignite's Accuracy, Precision, and Recall metrics currently only support averaged multi-label scores — a single scalar summarizing performance across all labels. There is no way to get per-label (label-wise) scores.
 
 ### Expected Behavior
 
-[What should happen?]
+A user should be able to request per-label metric values, e.g. 3 separate accuracy scores for a 3-label problem, so they can identify which specific label is driving overall error.
 
 ### Current Behavior
 
-[What actually happens?]
+- Accuracy(is_multilabel=True) always averages across labels/samples into one number; there's no flag to disable this.
+- Precision(is_multilabel=True, average=False) does not return per-label scores either — it returns a per-sample binary result instead of a per-label score, which is not what users expect.
 
 ### Affected Components
 
-[Which parts of the codebase are involved?]
+ignite/metrics/accuracy.py (Accuracy, and shared logic in _BaseClassification)
+ignite/metrics/precision.py (Precision)
+ignite/metrics/recall.py (Recall)
+Corresponding test files under tests/ignite/metrics/
+Possibly shared logic in ignite/metrics/metrics_lambda.py if label-wise output needs special handling downstream
 
 ---
 
@@ -37,13 +44,13 @@
 
 ### Environment Setup
 
-[Notes on setting up your local development environment - challenges you faced, how you solved them]
+Reusing the ignite-dev conda environment (Python 3.10) set up for my first contribution — no changes needed. Will re-sync my existing fork (zongyang078/ignite) with upstream/main before starting, since it's been several months since my last contribution and the codebase has moved from the 2019-era metrics implementation referenced in the original issue to the current v0.5.x structure (confirmed via current source: ignite/metrics/accuracy.py now includes a shared _BaseClassification base class and additional skip_unrolling support not present in 2019).
 
 ### Steps to Reproduce
 
-1. [Step 1]
-2. [Step 2]
-3. [Observed result]
+1. Construct a multi-label batch, e.g. y_true and y_pred of shape (batch_size, num_labels) with 0/1 values.
+2. Attach Accuracy(is_multilabel=True) and run — observe only a single averaged scalar is returned.
+3. Attempt Precision(is_multilabel=True, average=False) — observe the returned tensor has shape (batch_size,) (per-sample), not (num_labels,) (per-label) as a user might expect.
 
 ### Reproduction Evidence
 
