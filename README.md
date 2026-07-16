@@ -1,8 +1,9 @@
 # Contribution 2: Label-wise metrics (Accuracy) for multi-label problems
+
 **Contribution Number:** 2
-**Student:** Zoe
+**Student:** Zongyang Li
 **Issue:** https://github.com/pytorch/ignite/issues/513
-**Status:** Phase I - In Progress
+**Status:** Phase IV [In Progress]
 
 ---
 
@@ -63,14 +64,14 @@ I also read the actual source (`ignite/metrics/accuracy.py`) rather than reasoni
    python3 -c "import ignite; print(ignite.__file__)"
    ```
    Output: `/Users/lizongyang/code/AI301/ignite/ignite/__init__.py` — confirms it points at my local fork directory, so any code changes I make will actually be picked up when I re-run verification, rather than silently testing against a stale installed copy.
-3. Synced my existing fork (`zongyang078/ignite`, originally created for Contribution 1) with `upstream/main`, since it had been several months since my last contribution:
+3. Synced my existing fork (`zongyang078/ignite`, originally created for Contribution 1) with `upstream/master`, since it had been several months since my last contribution:
    ```bash
    cd /Users/lizongyang/code/AI301/ignite
    git remote -v          # confirmed `upstream` remote points to pytorch/ignite
    git fetch upstream
-   git checkout main
-   git merge upstream/main
-   git push origin main
+   git checkout master
+   git merge upstream/master
+   git push origin master
    ```
    This sync is what pulled in the `_BasePrecisionRecall` refactor discussed below — without it, my reproduction script would have been running against a stale version of `Precision`/`Recall` and could have produced misleading results about what's already fixed.
 4. No new packages needed — `torch`, `ignite` (editable install), and everything else required was already present from Contribution 1's setup.
@@ -85,29 +86,32 @@ Full script: `reproduce_513.py` in this repo.
 
 ### Reproduction Evidence
 
-**Hand-computed expectations** (5 samples × 3 labels):
-- Per-label accuracy: `[0.4, 0.8, 0.0]`
-- Per-label precision: `[0.4, 0.6667, 0.0]`
-- Per-label recall: `[1.0, 1.0, 0.0]`
+- **Commit showing reproduction:** [`reproduce_513.py`](https://github.com/zongyang078/su26-ai301-contribution-2) in my notes repo (hand-crafted 5×3 multilabel batch with hand-computed ground truth)
+- **Screenshots/logs:**
 
-**Actual outputs from `master`:**
+  Hand-computed expectations (5 samples × 3 labels):
+  - Per-label accuracy: `[0.4, 0.8, 0.0]`
+  - Per-label precision: `[0.4, 0.6667, 0.0]`
+  - Per-label recall: `[1.0, 1.0, 0.0]`
 
-| Call | Output | Shape | Matches hand-calc? |
-|---|---|---|---|
-| `Recall(is_multilabel=True).compute()` | `tensor([1., 1., 0.])` | `(3,)` | ✅ |
-| `Precision(is_multilabel=True).compute()` | `tensor([0.4000, 0.6667, 0.0000])` | `(3,)` | ✅ |
-| `Accuracy(is_multilabel=True).compute()` | `0.0` | scalar (Python float) | N/A — no per-label option exists |
+  Actual outputs from `master`:
 
-**`Accuracy.__init__` signature (confirmed via `inspect.signature`, v0.6.0):**
-```
-(self, output_transform, is_multilabel: bool = False, device, skip_unrolling: bool = False)
-```
-No `average` parameter — confirms the API gap versus `Precision`/`Recall`.
+  | Call | Output | Shape | Matches hand-calc? |
+  |---|---|---|---|
+  | `Recall(is_multilabel=True).compute()` | `tensor([1., 1., 0.])` | `(3,)` | ✅ |
+  | `Precision(is_multilabel=True).compute()` | `tensor([0.4000, 0.6667, 0.0000])` | `(3,)` | ✅ |
+  | `Accuracy(is_multilabel=True).compute()` | `0.0` | scalar (Python float) | N/A — no per-label option exists |
 
-### My Findings
-1. Two of the three metrics originally targeted by issue #513 (`Precision`, `Recall`) have already been fixed by a prior, undocumented-in-the-issue refactor (`_BasePrecisionRecall`).
-2. `Accuracy` was not migrated and still lacks label-wise support entirely.
-3. Beyond the missing feature, current multi-label `Accuracy` uses subset-accuracy semantics — correct per `sklearn` convention, but the exact UX pitfall the original issue author was reacting to, since it means a model with meaningfully useful per-label performance can still show `0.0` overall.
+  `Accuracy.__init__` signature (confirmed via `inspect.signature`, v0.6.0):
+  ```
+  (self, output_transform, is_multilabel: bool = False, device, skip_unrolling: bool = False)
+  ```
+  No `average` parameter — confirms the API gap versus `Precision`/`Recall`.
+
+- **My findings:**
+  1. Two of the three metrics originally targeted by issue #513 (`Precision`, `Recall`) have already been fixed by a prior, undocumented-in-the-issue refactor (`_BasePrecisionRecall`).
+  2. `Accuracy` was not migrated and still lacks label-wise support entirely.
+  3. Beyond the missing feature, current multi-label `Accuracy` uses subset-accuracy semantics — correct per `sklearn` convention, but the exact UX pitfall the original issue author was reacting to, since it means a model with meaningfully useful per-label performance can still show `0.0` overall.
 
 ---
 
@@ -156,95 +160,126 @@ Using UMPIRE framework (adapted):
 
 **Understand:** Users need per-label accuracy in multi-label settings; `Accuracy` is the only one of the three original metrics still lacking it, and its current subset-accuracy default is a known UX pitfall.
 
-**Match:** `_BasePrecisionRecall` in `precision.py`/`recall.py` is the reference pattern for accumulating and returning per-label tensors, `sync_all_reduce`-compatible. My prior PR (#3789, `EpochMetric` output types) already established the testing/validation conventions I'll reuse — recursive type-checking, `torch.allclose` numerical verification, conservative distributed handling.
+**Match:** `_BasePrecisionRecall` in `precision.py`/`recall.py` is the reference pattern for accumulating and returning per-label tensors, `sync_all_reduce`-compatible. My prior PR (#3789, `EpochMetric` output types) already established the testing/validation conventions I reused.
 
 **Plan:**
-1. Confirm scope with maintainer (open questions above) before writing implementation code.
-2. Add elementwise `correct` computation to `Accuracy.update()`'s multilabel path, active only when `average` is set.
-3. Change `_num_correct` to conditionally be either a scalar (current default) or a per-label tensor (`average=False`), and update `_state_dict_all_req_keys` handling accordingly.
-4. Add input validation (`average` set without `is_multilabel=True` → `ValueError`).
-5. Verify `sync_all_reduce` correctly handles the tensor case in distributed settings.
-6. Add tests with hand-computed expected values (`torch.allclose` pattern from #3789), covering: per-label values, edge cases (all-correct, all-wrong, a label with no positive samples), backward compatibility (`is_multilabel=False` and `is_multilabel=True` without `average` both unchanged).
-7. Update docstring with a runnable multi-label label-wise example, following the format already used in `precision.py`.
+1. Confirm scope with maintainer — posted check-in comment; proceeded with Scope A (additive, no breaking changes)
+2. Add elementwise `correct` computation to `Accuracy.update()`'s multilabel path
+3. Change `_num_correct` from always-tensor to `int | torch.Tensor` (mirrors `Precision`/`Recall`)
+4. Add input validation (`average` set without `is_multilabel=True` → `ValueError`)
+5. Verify `sync_all_reduce` handles the tensor case in distributed settings
+6. Add tests (per-label values, edge cases, backward compat, Engine integration, distributed)
+7. Update docstring with runnable multilabel per-label example
 
-**Implement:** _Not yet started — awaiting maintainer scope confirmation._
+**Implement:** Branch [`feat/accuracy-average-param`](https://github.com/zongyang078/ignite/tree/feat/accuracy-average-param) — see [PR #3810](https://github.com/pytorch/ignite/pull/3810) for the full diff. Key implementation detail: `reset()` had to change from `torch.tensor(0)` to plain `int 0` because PyTorch in-place `+=` can't broadcast a 0-dim tensor to shape `(C,)` — same `int | torch.Tensor` pattern `Precision`/`Recall` already use.
 
-**Review:** Self-review checklist before opening PR:
-- [ ] Backward compatible — default behavior byte-for-byte unchanged
-- [ ] API naming aligned with `Precision`/`Recall` conventions
-- [ ] Distributed sync (`sync_all_reduce`) verified for the tensor `_num_correct` case
-- [ ] Tests cover per-label values, edge cases, backward compat, and the validation error case
-- [ ] Docstring includes a runnable example
-- [ ] PR description explicitly states scope boundary relative to #3610/#3568
+**Review:** Self-review checklist:
+- [x] Backward compatible — default behavior unchanged
+- [x] API naming aligned with `Precision`/`Recall` conventions
+- [x] Distributed sync (`sync_all_reduce`) verified for tensor `_num_correct`
+- [x] Tests cover per-label values, edge cases, backward compat, and validation errors
+- [x] Docstring includes a runnable example
+- [x] PR description explicitly states scope boundary relative to #3610/#3568
 
-**Evaluate:** Compare implementation output against hand-computed values on the toy dataset above; run the existing `test_accuracy.py` suite to confirm zero regressions to current (non-multilabel and default-multilabel) behavior.
+**Evaluate:** `verify_fix_513.py` matches hand-computed values exactly. Full test suite: 363 passed, zero regressions. Also ran `pyrefly check` (the project's CI type checker) — zero errors.
 
 ---
 
 ## Testing Strategy
 
 ### Unit Tests
-- [ ] `Accuracy(is_multilabel=True, average=False)` returns correct per-label tensor on hand-computed toy dataset (values above)
-- [ ] Per-label output shape matches `(num_labels,)`
-- [ ] Edge case: a label with zero positive samples in the batch
-- [ ] Edge case: all predictions correct → all-ones tensor
-- [ ] Edge case: all predictions wrong → all-zeros tensor
-- [ ] `average` set without `is_multilabel=True` raises `ValueError`
-- [ ] Backward compatibility: `Accuracy()` (binary/multiclass, no `is_multilabel`) unchanged
-- [ ] Backward compatibility: `Accuracy(is_multilabel=True)` with no `average` still returns the current subset-accuracy scalar, unchanged
+- [x] `Accuracy(is_multilabel=True, average=False)` returns correct per-label tensor on hand-computed toy dataset (values above)
+- [x] Per-label output shape matches `(num_labels,)`
+- [x] Edge case: a label with zero positive samples in the batch
+- [x] Edge case: all predictions correct → all-ones tensor
+- [x] Edge case: all predictions wrong → all-zeros tensor
+- [x] `average` set without `is_multilabel=True` raises `ValueError`
+- [x] Backward compatibility: `Accuracy()` (binary/multiclass, no `is_multilabel`) unchanged
+- [x] Backward compatibility: `Accuracy(is_multilabel=True)` with no `average` still returns the current subset-accuracy scalar, unchanged
 
 ### Integration Tests
-- [ ] Metric attached to an `Engine`, run over multiple epochs, correctly resets/accumulates per-label tensor state each epoch
-- [ ] Distributed (multi-process) synchronization produces correct per-label results via `sync_all_reduce`
+- [x] Metric attached to an `Engine`, run over multiple epochs, correctly resets/accumulates per-label tensor state each epoch (this is the test that would have caught the `reset()` bug directly)
+- [x] Distributed (multi-process) synchronization produces correct per-label results via `sync_all_reduce`
 
 ### Manual Testing
-Will run the implemented metric against my existing reproduction script (`reproduce_513.py`) and confirm outputs match the hand-computed values before opening the PR. Not yet done — implementation not started.
+Ran the implemented metric against `reproduce_513.py` and a new `verify_fix_513.py` (per-label output, backward-compat default, validation errors, and a multi-epoch reset/update regression check) — all outputs match hand-computed values. Also ran `pytest tests/ignite/metrics/test_accuracy.py -v` (363 passed) plus the wider set of files that touch `Accuracy` before opening the PR.
 
 ---
 
 ## Implementation Notes
 
-### Week [1] Progress
+### Week 1 — Phase 1 (Issue Selection)
 
-- Wrote and ran `reproduce_513.py` against current `master` to establish ground truth on exactly what's still broken, rather than trusting the 2019 issue description — this is what revealed the scope had shrunk from 3 metrics to 1.
-- Read the complete historical thread: the original 2019 PR (#516) and its maintainer feedback, the follow-up attempt (PR #542, which stalled the same day maintainer feedback arrived), and the currently-open, unrelated `TopK` wrapper effort (#3568/#3610) that also touches `Accuracy` internally but doesn't block this work — full writeup in `RELATED_WORK.md`.
-- Read `accuracy.py` and `precision.py` side-by-side at the source level (not just the issue discussion) to find the actual structural reason a naive "copy the Precision pattern" fix wouldn't work — see Solution Approach → Analysis.
-- Drafted (not yet posted) a check-in comment for the issue that surfaces this analysis and asks the maintainer for scope confirmation before implementation begins.
+- Evaluated ~15 candidate issues across vllm-omni, vllm, scikit-learn, pytorch/executorch, vllm-metal, and pytorch/ignite. Each was rejected for a specific reason (already claimed, PR in flight, hardware-inaccessible, design unresolved).
+- Selected ignite #513 for its fit with my existing contribution context (same `ignite/metrics/` module, same maintainer, same dev environment as Contribution 1).
 
+### Week 2 — Phase 2 (Reproduce & Plan)
 
+- **Reproduction:** Wrote and ran `reproduce_513.py` against current `master` — discovered that 2 of 3 originally-targeted metrics had already been fixed by an undocumented refactor (`_BasePrecisionRecall`), narrowing the real scope from 3 classes to 1.
+- **Historical analysis:** Read PR #516, PR #542, issue #467, issue #3568, and draft PR #3610 end-to-end. Found that both prior attempts stalled on the same API design objection (boolean `labelwise` flag rejected by maintainer), and that an adjacent TopK wrapper effort (#3610) is stalled with an unresolved 3-way design disagreement but doesn't block this work. Full writeup in `RELATED_WORK.md`.
+- **Source-level analysis:** Read `accuracy.py` and `precision.py` side-by-side to find the structural reason a naive "copy the Precision pattern" fix wouldn't work (subset accuracy via `torch.all` destroys the label dimension — see Solution Approach → Analysis).
+- **Plan:** Scoped the fix to Scope A (additive `average=False`, no breaking changes, orthogonal to #3610). Drafted check-in comment for the issue.
+
+### Week 3 — Phase 3 (Build) + Phase 4 (Submit & Iterate)
+
+- Posted check-in comment to issue #513, then started implementation immediately without waiting for a reply — Scope A is additive and backward-compatible, so the risk of proceeding is low (unlike PR #516/#542 which proposed a new flag the maintainer actively disliked).
+- Implemented the `average` parameter: `__init__` validation, elementwise per-label `correct` path in `update()`, tensor-aware `compute()`.
+- Found and fixed a runtime bug: `reset()` initialized `_num_correct` as `torch.tensor(0)` (a real 0-dim tensor), which crashes on in-place `+=` with a `(C,)` vector. Fixed by switching to plain `int 0`, matching `Precision`/`Recall`'s `int | torch.Tensor` pattern.
+- That fix cascaded into two pre-existing tests (`test_accumulator_device`, `test_integration_batchwise`) that assumed `_num_correct` is always a tensor — updated both.
+- Caught a static type error via `pyrefly check` (the project's CI type checker): `int` has no `.item()`. Fixed with `cast(torch.Tensor, ...)`, matching `Precision`'s pattern.
+- Wrote comprehensive tests: per-label correctness, edge cases (all-correct, all-wrong, no-positive-label), multi-batch accumulation, Engine integration with multi-epoch reset, distributed integration.
+- Verified: 363 tests passed, zero regressions, zero type errors.
+- Opened [PR #3810](https://github.com/pytorch/ignite/pull/3810) on 2026-07-15. Awaiting maintainer review.
 
 ### Code Changes
-- **Files modified:** [List]
-- **Key commits:** [Links to important commits]
-- **Approach decisions:** [Why you chose certain approaches]
+- **Files modified:**
+  - `ignite/metrics/accuracy.py` — `average` parameter, per-label `update()` path, tensor-aware `compute()`, `cast()` for the type checker
+  - `tests/ignite/metrics/test_accuracy.py` — validation test, per-label correctness + edge cases, Engine integration (multi-epoch), distributed integration, `test_accumulator_device` fix
+  - `tests/ignite/metrics/test_running_average.py` — type-agnostic `_num_correct` comparison fix
+- **Key commits:** on branch `feat/accuracy-average-param` in my fork (`zongyang078/ignite`); see [PR #3810](https://github.com/pytorch/ignite/pull/3810) for the full commit list
+- **Approach decisions:**
+  - `average=None` default (not `False`) — unlike `Precision`/`Recall`, `Accuracy`'s default can't become per-label without breaking every existing caller (see RELATED_WORK.md §4.5)
+  - Only `None`/`False` accepted for now (not the full `'micro'`/`'macro'`/`'weighted'`/`'samples'` vocabulary) — deferred to maintainer input since those don't have unambiguous meaning for `Accuracy` (RELATED_WORK.md §4.4)
+  - `_num_correct: int | torch.Tensor` instead of a separate init path per `average` value — mirrors `Precision`/`Recall`'s existing `_numerator`/`_denominator` pattern exactly, so the accumulator "grows into" the right shape on first `update()`
 
 ---
 
 ## Pull Request
 
-**PR Link:** [GitHub PR URL when submitted]
-**PR Description:** [Draft or final PR description - much of the content above can be adapted]
+**PR Link:** [PR #3810](https://github.com/pytorch/ignite/pull/3810)
+**PR Description:** Adapted from the Proposed Solution / Solution Approach sections above, using the community's actual PR template format (`Fixes #513` / `## Description` / checklist) rather than the longer draft originally written here — explicitly calls out the scope boundary relative to #3568/#3610 and the two incidental test fixes.
 **Maintainer Feedback:**
-- [Date]: [Summary of feedback received]
-- [Date]: [How you addressed it]
-**Status:** [Awaiting review / Iterating / Approved / Merged]
+- 2026-07-15: PR opened, awaiting review.
+**Status:** Awaiting review
 
 ---
 
 ## Learnings & Reflections
 
 ### Technical Skills Gained
-[What you learned technically]
+- Reading two implementations of a similar pattern (`_BaseClassification` vs `_BasePrecisionRecall`) side by side to find a structural difference invisible from the issue discussion alone — the distinction between "elementwise `correct`, naturally decomposable per label" and "subset `correct` via `torch.all`, label dimension already collapsed."
+- Understanding PyTorch in-place operator semantics: `tensor += vector` fails when shapes don't match because `__iadd__` calls `add_` which can't reallocate, while `int += vector` works because Python falls back to `__radd__` which creates a new object.
+- Running a project's actual CI toolchain locally (`pyrefly check`, not just `pytest`) to catch type errors before the PR hits CI — and understanding why `int | torch.Tensor` requires `cast()` for the type checker even when the runtime would be fine.
 
 ### Challenges Overcome
-[What was hard and how you solved it]
+- The 2019 issue description was stale — 2 of 3 targeted metrics had been quietly fixed. Confirming this required running code against `master`, not just reading the discussion. Lesson: always reproduce before planning.
+- Distinguishing a blocking dependency from an adjacent one: the #3610 TopK wrapper effort touches `Accuracy` but doesn't solve or block this issue's ask. Recognizing that required reading its full design debate (three competing proposals, still unresolved) rather than assuming "same class = same effort."
+- The `reset()` bug was invisible from reading the diff — it only surfaced at runtime on the second epoch. Writing a multi-epoch regression test (`check_multi_epoch_reset`) before considering the implementation "done" is what caught it.
 
 ### What I'd Do Differently Next Time
-[Reflection on your process]
+- Run the reproduction script earlier in the process — the scope reduction it revealed reshaped every subsequent decision, and I could have deprioritized some of the tangential historical reading until after confirming what was actually still relevant.
+- Check the project's CI pipeline configuration (`.github/workflows/`) before opening the PR, not after — I found the `pyrefly check` requirement late and had to do a follow-up fix commit.
 
 ---
 
 ## Resources Used
-- [Link to helpful documentation]
-- [Tutorial or Stack Overflow post that helped]
-- [GitHub issues or discussions that helped]
+- Original issue: https://github.com/pytorch/ignite/issues/513
+- Prior attempt #1 (2019, stalled on API design): https://github.com/pytorch/ignite/pull/516
+- Prior attempt #2 (2019, stalled same day as maintainer feedback): https://github.com/pytorch/ignite/pull/542
+- Related issue (Top-K precision/recall): https://github.com/pytorch/ignite/issues/467
+- Adjacent effort (TopK wrapper): https://github.com/pytorch/ignite/issues/3568 and https://github.com/pytorch/ignite/pull/3610
+- Merged precedent for wrapper pattern: https://github.com/pytorch/ignite/pull/3627
+- Ignite metrics documentation: https://pytorch.org/ignite/metrics.html
+- Full related-work analysis (this repo): `RELATED_WORK.md`
+- Reproduction script (this repo): `reproduce_513.py`
+- Verification script (this repo): `verify_fix_513.py`
