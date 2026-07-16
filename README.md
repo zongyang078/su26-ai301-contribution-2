@@ -247,9 +247,12 @@ Ran the implemented metric against `reproduce_513.py` and a new `verify_fix_513.
 ## Pull Request
 
 **PR Link:** [PR #3810](https://github.com/pytorch/ignite/pull/3810)
+
 **PR Description:** Adapted from the Proposed Solution / Solution Approach sections above, using the community's actual PR template format (`Fixes #513` / `## Description` / checklist) rather than the longer draft originally written here — explicitly calls out the scope boundary relative to #3568/#3610 and the two incidental test fixes.
+
 **Maintainer Feedback:**
 - 2026-07-15: PR opened, awaiting review.
+
 **Status:** Awaiting review
 
 ---
